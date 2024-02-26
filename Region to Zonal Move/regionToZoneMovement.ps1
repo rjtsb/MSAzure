@@ -4,20 +4,115 @@ param
     [Parameter(Mandatory = $true)]
     [string]$subscription,
     [Parameter(Mandatory = $true)]
-    [string]$resourceGroup,
+    [string]$diagnosticStorageAccount,
     [Parameter(Mandatory = $true)]
-    [string]$ogvmName,
+    [string]$storageResourceGroup,
     [Parameter(Mandatory = $true)]
-    [string]$location,
+    [string]$vaultResourceGroup,
     [Parameter(Mandatory = $true)]
-    [string]$zone,
+    [string]$vaultName
 )
 
-
+# Function to validate execution dependency
+function dependency_validation{
+# Checking if VM is running and Agent status is Ready
+    try{
+        $vmStatus = Get-AzVM -ResourceGroupName $resourceGroup -Name $ogvmName -Status
+        if ($vmStatus.Statuses[1].DisplayStatus -eq "VM Running") {
+            Write-Verbose "VM $ogvmName is running..."
+            if ($vmStatus.VMAgent.Statuses.DisplayStatus -eq "Ready"){
+                Write-Verbose "VM $ogvmName Agent status is Ready"
+                }else{ 
+                Write-Verbose "VM $ogvmName Agent status is NOT Ready"
+                $Global:flag = "false"
+                }
+        } else {
+            Write-Verbose "VM $ogvmName is NOT running..."
+            $Global:flag = "false"
+        }
+    } Catch {
+        Write-Error "Some error occurred while getting VM Health status, please recheck once."
+        $Global:flag = "false"
+    }
+# Checking the Last Backup status
+    try{    
+        $targetVault = Get-AzRecoveryServicesVault -ResourceGroupName $vaultResourceGroup -Name $vaultName
+        $joblist = Get-AzRecoveryservicesBackupJob -Status "Completed" -VaultId $targetVault.ID
+        if ($joblist | Where-Object {$_.WorkloadName -contains $ogvmName}){
+            $lastBackupTime = New-TimeSpan -Start $joblist[0].EndTime -End (Get-Date)
+            if($lastBackupTime.Hours -lt "24"){
+                Write-Verbose "Backup jobs are completed $($lastBackupTime.Hours) hours ago."
+            } else {
+                Write-Verbose "Backup is not completed, please recheck once."
+                $Global:flag = "false"
+            }
+        } else {
+            Write-Host "Backup job is NOT there, kindly check"
+           # $Global:flag = "false"
+        }
+    } catch {
+        Write-Error "Some error occurred while checking Backup, please recheck once."
+        $Global:flag = "false"
+    }
+# Exporting the Original Configurations of VM in XML file
+    try {
+        $xmlFilePath = "C:\Temp\$ogvmName.xml"
+        # Get the details of the VM to be moved to the Availability Set
+        Write-Verbose "Getting details of the VM $ogvmName..."
+        $originalVM = Get-AzVM -ResourceGroupName $resourceGroup -Name $ogvmName
+        # Export the original VM details to XML
+        Write-Verbose "Exporting VM $ogvmName details to XML..."
+        $originalVM | Export-Clixml -Path $xmlFilePath
+    } catch {
+        Write-Error "An error occurred while getting details or exporting VM $ogvmName details to XML"
+        $Global:flag = "false"
+    }
+# Changing the DeleteOption to Detach
+    try{
+        $vmConfig = Get-AzVM -ResourceGroupName $resourceGroup -Name $ogvmName
+        Write-Verbose "Changing DeleteOption from OS Disk..."
+        $vmConfig.StorageProfile.OsDisk.DeleteOption = 'Detach'
+        Write-Verbose "Changing DeleteOption from Data Disks..."
+        $vmConfig.StorageProfile.DataDisks | ForEach-Object { $_.DeleteOption = 'Detach' }
+        #Write-Verbose "Changing DeleteOption from NIC..."
+        #$vmConfig.NetworkProfile.NetworkInterfaces | ForEach-Object { $_.DeleteOption = 'Detach' }
+        $vmConfig | Update-AzVM
+        Write-Verbose "DeleteOption is changed to Detach successfully"
+    } catch {
+        Write-Verbose "An error occurred while setting OS Disk to DETACH , please verify again"
+        $Global:flag = "false"
+    }
+# Checking the LOCK on Resource Group
+    try{
+        $lock = Get-AzResourceLock -ResourceGroupName $resourceGroup -LockName 'NO_DELETE'
+        if ($lock) {
+            Write-Verbose "Lock 'NO_DELETE' is present on the RG"
+        } else {
+            Write-Verbose "No LOCK is there"
+        }
+    } catch {
+        Write-Verbose "An error occurred while checking the LOCK, please verify again"
+        $Global:flag = "false"
+    }
+# Checking if SKU is present in Zone    
+    try {
+        Write-Verbose "Checking the SKU availability in Zone $zone"
+        $skus = Get-AzComputeResourceSku | Where-Object { $_.Locations -contains $location -and $_.ResourceType -eq "virtualMachines" -and ($_.Name -eq $skuName -and $_.LocationInfo.Zones -contains $zone) }
+        if ($skus) {
+            Write-Host -Foregroundcolor Green "SKU '$skuName' is available in zone '$zone' in location '$location'."
+        } else {
+            Write-Host -Foregroundcolor RED "SKU '$skuName' is NOT available in zone '$zone' in location '$location'."
+            $Global:flag = "false"
+        }
+    } catch {
+        Write-Verbose "An error occurred, please verify again"
+        $Global:flag = "false"
+    }
+return $Global:flag
+}
 
 function mainExecution{
-    $UniqueRandomString = "az"
-    $newvmName = $ogvmName
+    if ($Global:flag -eq 'true'){
 		try{
 			# Set the subscription
 			Set-AzContext -Subscription $subscription
@@ -152,4 +247,19 @@ function mainExecution{
 			}else{
 				Write-host "Validation Passed: The number of data disks on the original VM ($originalDataDiskCount) matches the number on the new VM ($newDataDiskCount)."
 				}
+    } else {
+		Write-Error "Dependency Validations Failed"
+		break
+	}
 }
+$VerbosePreference = 'Continue'
+$resourceGroup = "RG-NAME"
+$ogvmName = "VM-NAME"
+$zone = "2"
+$UniqueRandomString = "az"
+$Global:flag = "true"
+$newvmName = $ogvmName
+dependency_validation
+sleep 20
+mainExecution
+
