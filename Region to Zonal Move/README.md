@@ -5,6 +5,16 @@
 
 ## Steps :
 * First we'll be taking all required variables to proceed with our script
+* Execute dependency validations
+  - a. VM Exist or not
+  - b. Get VM details
+  - c. Health status (Power State, Agent Status), Last Successful Backup should less than 24hrs
+  - d. Export VM Configs as xml
+  - e. Resource Delete options (OS and Data disks, NIC) set it as Detach instead of Delete
+  - f. Subscription and SKUs Quota as per Zone
+  - g. Lock
+  - h. Diagnostic Storage account
+### Note: If all success, good to go otherwise exit.
 * Then in Execution Phase we'll be implementing the actual script
   - a. Remove Lock
   - b. VM Power Status should Stopped (deallocated)
