@@ -1,6 +1,6 @@
 # Move Azure Virtual Machine from Region to Any Zone or Zone to Zone through PowerShell script
 
-### In Azure, we can't move a VM to Zone if it is not already in Zone. We are developing a custom script which can solve this problem.
+### In Azure, we can't move a VM to Zone if it is not already in Zone. Also zone to zone movement is time taking process in Azure. We are developing a custom script which can solve this problem.
 ### Our aim is to seamlessly move VM into Zone also with minimal Down time, so it'll be easy for any Production Environment as well.
 
 ## Steps :
